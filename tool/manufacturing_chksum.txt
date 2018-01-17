@@ -1,0 +1,3 @@
+[I] One Byte CheckSum:      1C5E, Two's Complement:      E3A2
+[I] Two Byte CheckSum:      443A, Two's Complement:      BBC6
+[I] Long CheckSum:      CAB2443A, Two's Complement:  354DBBC6

@@ -1,0 +1,1103 @@
+###############################################################################
+#
+# IAR ANSI C/C++ Compiler V7.10.1.6676/W32 for ARM        01/Sep/2016  15:29:48
+# Copyright 1999-2014 IAR Systems AB.
+#
+#    Cpu mode     =  thumb
+#    Endian       =  little
+#    Source file  =  D:\develop\hw_dr001\main_app\GPRS\2G.c
+#    Command line =  
+#        D:\develop\hw_dr001\main_app\GPRS\2G.c -D VECT_TAB_FLASH -D
+#        IAR_ARM_CM3 -lcN D:\develop\hw_dr001\CORTEX_STM32F103_IAR\Debug\List\
+#        --diag_suppress Pa050 -o
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\Debug\Obj\ --no_cse
+#        --no_unroll --no_inline --no_code_motion --no_tbaa --no_clustering
+#        --no_scheduling --debug --endian=little --cpu=Cortex-M3 -e --fpu=None
+#        --dlib_config "C:\Program Files (x86)\IAR Systems\Embedded Workbench
+#        7.0\arm\INC\c\DLib_Config_Full.h" -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\.\ -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\Diag_Factory\ -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\common\ -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\power\ -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\SysMan\ -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\Protocol\ -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\include\ -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\FreeRTOS\include\
+#        -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\FreeRTOS\portable\IAR\ARM_CM3\
+#        -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\Arch\stm32f1\Libraries\STM32F10x_StdPeriph_Driver\inc\
+#        -I D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\drivers\ -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\Arch\stm32f1\Libraries\CMSIS\CM3\DeviceSupport\ST\STM32F10x\
+#        -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\Arch\stm32f1\Libraries\CMSIS\CM3\CoreSupport\
+#        -I D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\GPS\ -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\GPRS\ -I
+#        D:\develop\hw_dr001\CORTEX_STM32F103_IAR\..\main_app\Sensors\ -Ol
+#        --use_c++_inline --require_prototypes
+#    List file    =  D:\develop\hw_dr001\CORTEX_STM32F103_IAR\Debug\List\2G.lst
+#    Object file  =  D:\develop\hw_dr001\CORTEX_STM32F103_IAR\Debug\Obj\2G.o
+#
+###############################################################################
+
+D:\develop\hw_dr001\main_app\GPRS\2G.c
+      1          /**********************************************************************
+      2             Title                      : 3G.c         
+      3                                                                                   
+      4             Module Description         : Telematics module. This file is the communication task
+      5                                                  with 3G modlue.
+      6          
+      7             Author                     : 
+      8             
+      9           *********************************************************************/
+     10          
+     11          /**********************************************************************
+     12           * Include files                                                       
+     13           *********************************************************************/
+     14          #include "standard.h"
+     15          #include "ATProtocol.h"
+     16          #include "ATApp.h"
+     17          #include "TelmProtocol.h"
+     18          #include "stm32f10x_rtc.h"
+     19          #include <string.h>
+     20          
+     21          #include "uart.h"
+     22          #include "gps.h"
+     23          //#include "spi_flash.h"
+     24          #define USE_DEBUG
+     25          #include "Debug.h"
+     26          
+     27          /**********************************************************************
+     28           * Constant and Macro Definitions using #define
+     29           *********************************************************************/
+     30          #define TIMER_QUERY_INTERVAL	(MSec_To_Ticks(2000))
+     31          #define TIMER_UPGRADE_GUARD   (10 * ONE_MINUTE_IN_TICKS)   //3G firmware upgrade guard timer is 
+     32          
+     33          //#define TEST_2G_SIGNAL
+     34          //#define TEST_BATT
+     35          //#define TEMPERATURE_READ_ENABLE
+     36          //#define USE_DEV_TRACE
+     37          //#define SEND_TRAVEL_SUMMARY
+     38          
+     39          #define OTA_DATA_LEN_MAX 0x3FF00
+     40          #ifdef USE_DEV_TRACE
+     41          #define DEV_TRACE_TIME (1400000)
+     42          #endif
+     43          /*********************************************************************/
+     44          /* Enumerations and Structures and Typedefs                          */
+     45          /*********************************************************************/
+     46          static bool	telematics_module_pwr_on;
+     47          static bool telematics_module_upgrade_state; // 0: No upgrade state, 1: upgrade in progress
+     48          
+     49          /* Addr 0x00 - 0x03 */
+     50          typedef struct init_flag_tag
+     51          {
+     52              uint8_t flags[4];
+     53          }init_flag_t;
+     54          
+     55          /* Addr 0x04 - 0x21*/
+     56          typedef struct sys_config_tag
+     57          {
+     58              uint8_t server_ip[4];
+     59              uint8_t server_port[2]; /* LSB first */
+     60              uint8_t conn_retry;
+     61              uint8_t send_retry;
+     62              uint8_t exception_data_num;
+     63              uint8_t tracking_param_1;
+     64              uint8_t tracking_param_2;
+     65              uint8_t tracking_param_3;
+     66              uint8_t tracking_param_4;
+     67              uint8_t tracking_param_5;
+     68          }sys_config_t;
+     69          
+     70          typedef struct gps_back_header_tag
+     71          {
+     72              uint8_t total_num;
+     73              uint8_t sent_ptr;
+     74              uint8_t store_ptr;
+     75          }gps_back_header_t;
+     76          
+     77          typedef struct ota_header_tag
+     78          {
+     79              uint8_t ota_start_flag;
+     80              uint8_t ota_data_len[4];
+     81              uint8_t sw_ver[4];
+     82              uint8_t checksum[4];
+     83          }ota_header_t;
+     84          
+     85          #ifdef DEVICE_ACTIVATED
+     86          static uint8_t tbox_activated_state = 1; // 0: Not activated, 1: activated
+     87          #else
+     88          static uint8_t tbox_activated_state = 0; // 0: Not activated, 1: activated
+     89          #endif
+     90          static uint8_t harsh_data = 0; // 0: No harsh data to send, 1: data to send
+     91          extern  uint8_t prvATProt_Uart_Transmit(const char* tx_buf, uint16_t bytes);
+     92          /**********************************************************************
+     93           * Function Prototypes for Private Functions with File Level Scope
+     94           *********************************************************************/
+     95          static void prv3G_Module_Init(void);
+     96          
+     97          static void prv3G_evt_nop(int16_t data);
+     98          static void prv3G_evt_car_crashed(int16_t data);
+     99          static void prv3G_evt_g_high(int16_t data);
+    100          static void prv3G_evt_server_command(int16_t data);
+    101          static void prv3G_evt_reset_module(int16_t data);
+    102          static void prv3G_evt_eng_on_off(int16_t data);
+    103          static void prv3G_evt_sys_power_lost(int16_t data);
+    104          static void prv3G_evt_drive_fault(int16_t data);
+    105          static void prv3G_evt_car_theft(int16_t data);
+    106          static void prv3G_evt_pid_data(int16_t data);
+    107          static void prv3G_evt_dtc_data(int16_t data);
+    108          static void prv3G_evt_freeze_data(int16_t data);
+    109          static void prv3G_evt_engine_jam(int16_t data);
+    110          
+    111          //static void prvVehicleCrashed_Scan_init(void);
+    112          
+    113          static void prv2G_main_loop(void);
+    114          //static void vSend_Dev_Trace(void);
+    115          
+    116          uint32_t get_OTA_checksum(void);
+    117          
+    118          /*********************************************************************/
+    119          /* Static Variables and Const Variables With File Level Scope        */
+    120          /*********************************************************************/
+    121          //static bool	cme_error_received;
+    122          //static bool error_received;
+    123          //static bool	tcom_tx_msg_active;
+    124          
+    125          static void_int16_fptr tcom_event_handler[]=
+    126          {
+    127             prv3G_evt_nop,					//TM_EVT_NOP
+    128             prv3G_evt_reset_module,			//TM_EVT_RESET_MODULE
+    129             prv3G_evt_eng_on_off,			//TM_EVT_ENG_ON_OFF
+    130             prv3G_evt_car_crashed,			//TM_EVT_CAR_CRASHED
+    131             prv3G_evt_g_high,		//TM_EVT_G_HIGH_REP 
+    132             prv3G_evt_server_command,		//TM_EVT_SERVER_COMMAND //!!NOT USED
+    133             prv3G_evt_sys_power_lost,		//TM_EVT_BATTERY_FAULT 
+    134             prv3G_evt_drive_fault,     //TM_EVT_DRIVE_FAULT  //!!NOT USED
+    135             prv3G_evt_car_theft,    //TM_EVT_CAR_THEFT	 //!!NOT USED
+    136             prv3G_evt_pid_data,    //TM_EVT_PID_DATA_OK
+    137             prv3G_evt_dtc_data,    //TM_EVT_DTC_DATA_OK
+    138             prv3G_evt_freeze_data,    //TM_EVT_FREEZE_DATA_OK //!!NOT USED
+    139             prv3G_evt_engine_jam,    //TM_EVT_ENGINE_JAM
+    140          };
+    141          
+    142          /*********************************************************************/
+    143          /* User file include                                                 */
+    144          /*********************************************************************/
+    145          
+    146          /**********************************************************************
+    147           * Function Definitions
+    148           *********************************************************************/
+    149          /*******************************************************************************
+    150          *    Function:  vSystem_check3GAntenna
+    151          *
+    152          *  Parameters:  void
+    153          *     Returns:  void
+    154          * Description:  Check 3G antenna status
+    155          *******************************************************************************/
+    156          void vSystem_check3GAntenna(void)
+    157          {
+    158          }
+    159          /*******************************************************************************
+    160          *    Function:  v3G_Set_Telematics_Activation_State
+    161          *
+    162          *  Parameters:  
+    163          *     Returns:  None
+    164          * Description:  v3G_Set_Telematics_Activation_State.
+    165          *******************************************************************************/
+    166          void v3G_Set_Telematics_Activation_State(uint8_t act_flag)
+    167          {
+    168             tbox_activated_state = act_flag;
+    169              if (act_flag == 1)
+    170                  set_activated();
+    171          }
+    172          
+    173          /*******************************************************************************
+    174          *    Function:  v3G_Get_Telematics_Activation_State
+    175          *
+    176          *  Parameters:  
+    177          *     Returns:  None
+    178          * Description:  v3G_Get_Telematics_Activation_State.
+    179          *******************************************************************************/
+    180          uint8_t v3G_Get_Telematics_Activation_State(void)
+    181          {
+    182             return tbox_activated_state;
+    183          }
+    184          /*******************************************************************************
+    185          *    Function:  v3G_Set_Telematics_Module_Pwr_State
+    186          *
+    187          *  Parameters:  
+    188          *     Returns:  None
+    189          * Description:  v3G_Set_Telematics_Module_Pwr_State.
+    190          *******************************************************************************/
+    191          void v3G_Set_Telematics_Module_Pwr_State(bool pwr_flag)
+    192          {
+    193          	telematics_module_pwr_on = pwr_flag;
+    194          }
+    195          
+    196          /*******************************************************************************
+    197          *    Function:  v3G_Get_Telematics_Module_Pwr_State
+    198          *
+    199          *  Parameters:  
+    200          *     Returns:  None
+    201          * Description:  v3G_Get_Telematics_Module_Pwr_State.
+    202          *******************************************************************************/
+    203          bool v3G_Get_Telematics_Module_Pwr_State(void)
+    204          {
+    205          	return telematics_module_pwr_on;
+    206          }
+    207          /*******************************************************************************
+    208          *    Function:  u3G_Get_FMUpgrade_state
+    209          *
+    210          *  Parameters:  void
+    211          *     Returns:  void
+    212          * Description:  return the  3G firmware upgrade state: 1 is in upgrade mode, 0 is not in upgrade mode
+    213          *******************************************************************************/
+    214          bool u3G_Get_FMUpgrade_state(void)
+    215          {
+    216             return telematics_module_upgrade_state;
+    217          }
+    218          /*******************************************************************************
+    219          *    Function:  u3G_Get_FMUpgrade_state
+    220          *
+    221          *  Parameters:  void
+    222          *     Returns:  void
+    223          * Description:  return the  3G firmware upgrade state: 1 is in upgrade mode, 0 is not in upgrade mode
+    224          *******************************************************************************/
+    225          void u3G_Set_FMUpgrade_state(uint8_t fmupgrade_state)
+    226          {
+    227             telematics_module_upgrade_state = fmupgrade_state;
+    228          }
+    229          
+    230          /*******************************************************************************
+    231          *    Function:  IOT_Task
+    232          *
+    233          *  Parameters:  None
+    234          *     Returns:  None
+    235          * Description:  TASK to handle communication between MCU and GPRS module.
+    236          *******************************************************************************/
+    237          extern void IOT_Task(void* pvParameters)
+    238          {
+    239              Data_Message_T msg;
+    240              uint32_t csq_time = 0;
+    241          
+    242              #ifdef USE_DEBUG
+    243              DEBUG_PRINT0( DEBUG_LOW, "[2G]:2G TASK Started!\r\n");
+    244              #endif
+    245          
+    246              prv3G_Module_Init();
+    247          
+    248              csq_time = OS_Time();
+    249          
+    250              //by chuanji, to be reworked
+    251              if(Sys_Is_Gsensor_Wakeup())
+    252              {
+    253          	TMR_Start_Timer(TELM_CRASH_TIMER, 20000 , PS_Send_Crash_Msg_On_Timer);	
+    254          	//DEBUG_PRINT0 (DEBUG_LOW,"[2G]:===Who is moving your car?=== \r\n");
+    255              }
+    256          #ifdef USE_DEV_TRACE
+    257              if (u3G_Get_FMUpgrade_state() != 1)
+    258                  TMR_Start_Timer(DEV_TRACE_TIMER, DEV_TRACE_TIME, vSend_Dev_Trace);	
+    259          #endif
+    260          
+    261              //by chuanji, to be reworked
+    262              if(Sys_Is_Low_Batt_Wakeup())
+    263              {
+    264          	OS_Send_Message(OS_IOT_TASK,Build_Message(TM_EVT_BATTERY_FAULT, 1) );
+    265          	DEBUG_PRINT0 (DEBUG_MEDIUM,"[2G]:===Car Battery Is Low=== \r\n");
+    266              }
+    267              OS_Sleep(MSec_To_Ticks(1000));//Sleep 1s for module startup and simcard communication.
+    268              while(PS_Running()&&(Mdg_SW_Upgrage_mode==false))
+    269              {
+    270          	/* wait event from other tasks */
+    271                  if(E_OK == OS_Wait_Message(OS_IOT_TASK, &msg.all, MSec_To_Ticks(20)))// 20ms testing
+    272                	{
+    273                      if(msg.parts.msg < TM_NUM_EVENTS)
+    274                      {
+    275          		if(NULL != tcom_event_handler[msg.parts.msg])
+    276          		{
+    277          			(*tcom_event_handler[msg.parts.msg])(msg.parts.data);
+    278          		}
+    279                      }
+    280                  }
+    281          
+    282                  if (v3G_Get_Telematics_Module_Pwr_State())
+    283                  {
+    284                      vATProt_Check_Receive();
+    285                  }
+    286          
+    287                  if ((csq_time + MSec_To_Ticks(500)) < OS_Time())
+    288                  {
+    289                      #ifdef TEST_BATT
+    290                      DEBUG_PRINT1(DEBUG_HIGH,"[v %d]\r\n",Pwr_Fail_Get_Voltage());
+    291                      #endif
+    292                      vATApp_Loop_Check();
+    293                      prv2G_main_loop();
+    294                      csq_time = OS_Time();
+    295                  }
+    296          
+    297                  if (v3G_Get_Telematics_Module_Pwr_State())
+    298                  {
+    299                      vATProt_Check_Receive();
+    300                      vTelmApp_main_loop();
+    301                      vATProt_Check_Transmit();
+    302                  }
+    303              }
+    304              /* execute necessary process for going to sleep */
+    305          //    prv3G_Module_GoSleep();
+    306          
+    307              OS_Terminate_Task();
+    308          }
+    309          
+    310          /*******************************************************************************
+    311          *    Function:  prv3G_Module_Init
+    312          *
+    313          *  Parameters:  None
+    314          *     Returns:  None
+    315          * Description:  Initialize variables TCOM task use. UART Initilization should be put here.
+    316          *******************************************************************************/
+    317          static void prv3G_Module_Init(void)
+    318          {
+    319             v3G_Set_Telematics_Module_Pwr_State(false);
+    320             vATProt_Init();
+    321             vATApp_Init();
+    322             v3G_Set_Telematics_Module_Pwr_State(true);
+    323          }
+    324          
+    325          
+    326          static void check_nv_backup_message(void)
+    327          {
+    328              static int eng_send_wait = 0;
+    329              if (0 == eng_on_off_nv_empty())    // First, send backup 0x38 message
+    330              {
+    331                  if (0 == eng_on_off_nv_get_status())//engine backup message is not sending
+    332                  {
+    333                      if(vTelmApp_uploadData(TELM_SEC_EVT_ENGINE_BACKUP, NULL))
+    334                      {
+    335                      	eng_on_off_nv_set_status(1);//transit to sending state
+    336                          eng_send_wait = 0;
+    337                      }
+    338                  }
+    339                  else if (1 == eng_on_off_nv_get_status())
+    340                  {
+    341                      if (eng_send_wait > 10)
+    342                      {
+    343                          eng_send_wait = 0;
+    344                          eng_on_off_nv_set_status(0);
+    345                      }
+    346                      else
+    347                      {
+    348                          eng_send_wait++;
+    349                      }
+    350                  }
+    351              }
+    352          /*    else if (0 == travel_start_nv_empty())
+    353              {
+    354                  if (0 == travel_start_nv_get_status())//message is not sending
+    355                  {
+    356                      if(vTelmApp_uploadData(TELM_SEC_EVT_TRAVEL_START, NULL))
+    357                      {
+    358                          travel_start_nv_set_status(1);//transit to sending state
+    359                      }
+    360                  }
+    361              }*/
+    362              else if (!gps_backup_empty())    // Second, Send NV GPS data saved in network inactive state
+    363              {
+    364                  vTelmApp_uploadData(TELM_SEC_EVT_BACKUP, NULL); 
+    365              }
+    366          }
+    367          
+    368          static void prv2G_main_loop(void)
+    369          {
+    370              static uint8_t msg_send_cnt = 0;
+    371              static uint8_t gps_record_cnt = 0;
+    372              static bool gps_first_fixed = false;
+    373              static uint8_t eng_on_off_wait = 0;
+    374          
+    375              if(1 != v3G_Get_Telematics_Activation_State())
+    376          		return;
+    377          
+    378              if (NET_WAIT_DATA == vATProt_Get_TCP_State())
+    379              {
+    380                  if(PS_Eng_On())
+    381                  {
+    382                      // Get travel summary data
+    383                      TelmProt_Travel_Summary_Record();
+    384                      /*speed change dectect*/
+    385                      if (speed_check_func())
+    386                      {
+    387          	        vTelmApp_uploadData(TELM_SEC_EVT_EXCEPTION, NULL);
+    388                      }
+    389                      if ((gps_record_cnt >= get_gps_upload_freq())
+    390                          ||(vGps_Get_Gps_Status() && (!gps_first_fixed)))
+    391                      {
+    392                          if(vGps_Get_Gps_Status() && (!gps_first_fixed))
+    393                          {
+    394                              DEBUG_PRINT0(DEBUG_HIGH,"[GPS]:GPS first-fixed\n\r");
+    395                              gps_first_fixed = true;//send once gps position as soon as gps first fixed
+    396                          }
+    397                          /*collect gps message and save into RAM*/
+    398                          if (gps_upload_status() == GPS_BACKUP_STATE_IDLE)
+    399                          {
+    400                              save_gps_buffer();
+    401                          }
+    402                          else if (gps_upload_status() == GPS_BACKUP_STATE_PULL)
+    403                          {
+    404                              if (1 == gps_backup_empty())//gps flash buffer is empty
+    405                              {
+    406                                  /*collect gps message and save into RAM*/
+    407                                  set_gps_upload_backup(GPS_BACKUP_STATE_IDLE);
+    408                                  save_gps_buffer();
+    409                              }
+    410                              else//else send the rest GPS message stored in flash
+    411                              {
+    412                                  /*collect gps message and save into flash*/
+    413                                  gps_write_nv();
+    414          //                        save_gps_buffer();
+    415                                  vTelmApp_uploadData(TELM_SEC_EVT_BACKUP, NULL);
+    416                              }
+    417                          }
+    418                          gps_record_cnt = 0;
+    419                      }
+    420                  }
+    421                  else
+    422                  { 
+    423                      gps_first_fixed = false;
+    424                  }
+    425          
+    426                  if (msg_send_cnt%4 == 0)
+    427                  {
+    428                          vTelmApp_Upload_Backup(); // Send backup message saved in ram while network inactive state
+    429          
+    430                          if((0 == eng_on_off_ram_empty()) && (1 == eng_on_off_nv_empty()))// Send eng on off message saved in ram 
+    431                          {
+    432                               if (0 == eng_on_off_ram_get_status())//idle?
+    433                               {
+    434                                  if(vTelmApp_uploadData(TELM_SEC_EVT_ACC, NULL))
+    435                                  {
+    436                                     eng_on_off_ram_set_status(1);//transit to sending state
+    437                                     eng_on_off_wait = 0;
+    438                                  }
+    439                               }
+    440                               else if (1 == eng_on_off_ram_get_status())
+    441                               {
+    442                                  eng_on_off_wait++;
+    443                                  if (eng_on_off_wait > 100)
+    444                                  {
+    445                                      eng_on_off_ram_set_status(0);
+    446                                      eng_on_off_wait = 0;
+    447                                  }
+    448                               }
+    449                          }
+    450          /*                if (0 == travel_start_ram_empty())
+    451                          {
+    452                               if (0 == travel_start_ram_get_status())//message is not sending
+    453                               {
+    454                                  if(vTelmApp_uploadData(TELM_SEC_EVT_TRAVEL_START, NULL))
+    455                                  {
+    456                                     travel_start_ram_set_status(1);//transit to sending state
+    457                                  }
+    458                               }
+    459                          }*/
+    460                  }
+    461                  if (msg_send_cnt%30 == 0)
+    462          //        if (msg_send_cnt%10 == 0)
+    463                  {
+    464                      if (0 == gps_buffer_empty())// Send backup GPS data saved in network active state, from RAM
+    465                      {
+    466                          vTelmApp_uploadData(TELM_SEC_EVT_DRIVE, NULL); 
+    467                      }
+    468                      //if (GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_8) == 0)
+    469                      //{
+    470                      //    accept_call();
+    471                      //}
+    472                  }
+    473                  //else 
+    474                  if ((msg_send_cnt%5 == 0) && (u3G_Get_FMUpgrade_state() == 1)&&(PS_Full_System()))
+    475                  {
+    476                      if(TelmProt_Is_New_OTA())
+    477                      {
+    478                          TelmProt_Set_New_OTA(24);//OTA fill to buffer:60s, OTA send out for response:6.5s.
+    479                          vTelmApp_uploadData(TELM_SEC_EVT_OTA,NULL);            
+    480                      }
+    481                  }
+    482                  else if (msg_send_cnt%19 == 0)
+    483                  {
+    484          #ifdef TEST_2G_SIGNAL
+    485                      vATProt_sendAT_Command(AT_CMD_CSQ_QUERY, NULL, NULL);
+    486          #endif
+    487          #ifdef TEMPERATURE_READ_ENABLE
+    488                      vATProt_sendAT_Command(AT_CMD_TEMP_READ, NULL, NULL);
+    489          #endif
+    490                      check_nv_backup_message();
+    491                      if (harsh_data != 0)
+    492                      {
+    493                          if (NET_WAIT_DATA == vATProt_Get_TCP_State())
+    494                          {
+    495                              vTelmApp_uploadData(TELM_SEC_EVT_G_HIGH, NULL);
+    496                          }
+    497                          else
+    498                          {
+    499                              vTelmApp_Backup_Msg(TELM_SEC_EVT_G_HIGH);
+    500                          }
+    501                          harsh_data = 0;
+    502                      }
+    503                  }
+    504          
+    505                  if (msg_send_cnt > 240)
+    506                  {
+    507                      msg_send_cnt = 0;
+    508                  }
+    509                  gps_record_cnt++;
+    510          	msg_send_cnt++;
+    511              }
+    512              else if (NET_WAIT_DATA > vATProt_Get_TCP_State())
+    513              {
+    514                  if(PS_Eng_On())
+    515                  {
+    516                      if(((msg_send_cnt%get_gps_upload_freq()) == 0)
+    517                          ||(vGps_Get_Gps_Status() && (!gps_first_fixed)))
+    518                      {
+    519                          if(vGps_Get_Gps_Status() && (!gps_first_fixed))
+    520                          {
+    521                              DEBUG_PRINT0(DEBUG_HIGH,"[GPS]:GPS first-fixed\n\r");
+    522                              gps_first_fixed = true;//send once gps position as soon as gps first fixed
+    523                          }
+    524                          if (gps_upload_status() == GPS_BACKUP_STATE_PUSH)
+    525                          {
+    526                              gps_write_nv();
+    527                          }
+    528                      }
+    529                      msg_send_cnt++;
+    530                      gps_record_cnt++;
+    531                 }
+    532                 else
+    533                 {
+    534                      gps_first_fixed = false;
+    535                 }
+    536              }
+    537          }
+    538          /*******************************************************************************
+    539          *    Function:  prv3G_UART_stop
+    540          *
+    541          *  Parameters:  None
+    542          *     Returns:  None
+    543          * Description:  UART stop communication.
+    544          *******************************************************************************/
+    545          static void prv3G_UART_stop(void)
+    546          {
+    547          /*   UART_Release(UART_3G_CHANNEL);*/
+    548          }
+    549          
+    550          /*******************************************************************************
+    551          *    Function:  v3G_Module_GoSleep
+    552          *
+    553          *  Parameters:  None
+    554          *     Returns:  None
+    555          * Description:  Initialize variables TCOM task use. UART Initilization should be put here.
+    556          *******************************************************************************/
+    557          void v3G_Module_GoSleep(void)
+    558          {
+    559              if ((1 == u3G_Get_FMUpgrade_state()) &&
+    560                    (1 == v3G_Get_Telematics_Activation_State()))
+    561              {
+    562                  u3G_Set_FMUpgrade_state(0);
+    563              }
+    564          
+    565              vATApp_GoSleep();
+    566              vATProt_GoSleep();
+    567              prv3G_UART_stop();
+    568          }
+    569          
+    570          /*******************************************************************************
+    571          *    Function:  prv3G_evt_nop
+    572          *
+    573          *  Parameters:  None
+    574          *     Returns:  None
+    575          * Description:  Send series of command to 3G module for initilization.
+    576          *******************************************************************************/
+    577          static void prv3G_evt_nop(int16_t data)
+    578          {
+    579          }
+    580          
+    581          /*******************************************************************************
+    582          * Function:  prv3G_evt_reset_module
+    583          *
+    584          * Parameters:  None
+    585          * Returns:  None
+    586          * Description:  
+    587          *******************************************************************************/
+    588          static void prv3G_evt_reset_module(int16_t data)
+    589          {
+    590             vATProt_Com_Reset();
+    591             vATApp_Init();
+    592          }
+    593          
+    594          /*******************************************************************************
+    595          * Function:  prv3G_evt_eng_on_off
+    596          *
+    597          * Parameters:  None
+    598          * Returns:  None
+    599          * Description:  
+    600          *******************************************************************************/
+    601          static void prv3G_evt_eng_on_off(int16_t data)
+    602          {
+    603              if (1 != v3G_Get_Telematics_Activation_State())
+    604                  return;
+    605          	
+    606              eng_on_off_ram_write(data);
+    607          
+    608              if (data>0)
+    609              {
+    610                  TMR_Stop_Timer(TELM_CRASH_TIMER);
+    611          #ifdef SEND_TRAVEL_SUMMARY
+    612                  TelmProt_Clear_Travel_Summary();
+    613          #endif
+    614          //        OS_Send_Message(OS_DIAG_TASK, Build_Message(DIAG_EVT_READ_PARAMETER, 0x60));
+    615              }
+    616              else
+    617              {
+    618          #ifdef SEND_TRAVEL_SUMMARY
+    619                  vTelmApp_uploadData(TELM_SEC_EVT_TRAVEL_SUMMARY, NULL);
+    620          #endif
+    621              }
+    622          }
+    623          
+    624          /*******************************************************************************
+    625          *    Function:  prv3G_evt_car_crashed
+    626          *
+    627          *  Parameters:  None
+    628          *     Returns:  None
+    629          * Description:  
+    630          *******************************************************************************/
+    631          static void prv3G_evt_car_crashed(int16_t data)
+    632          {
+    633              if (1 != v3G_Get_Telematics_Activation_State() ||
+    634                    (PS_Eng_On()))//check again
+    635                  return;
+    636              //DEBUG_PRINT0(DEBUG_LOW,"[2G] abnormal movement!\n\r");
+    637              if (NET_WAIT_DATA == vATProt_Get_TCP_State())
+    638              {
+    639                  set_car_crash(data);
+    640          //        vTelmApp_uploadData(TELM_SEC_EVT_EXCEPTION, NULL);
+    641                  vTelmApp_uploadData(TELM_SEC_EVT_GSENSOR, NULL);
+    642              }
+    643              else
+    644              {
+    645                  set_car_crash(data);
+    646          //        vTelmApp_Backup_Msg(TELM_SEC_EVT_EXCEPTION);
+    647                  vTelmApp_Backup_Msg(TELM_SEC_EVT_GSENSOR);
+    648              }
+    649              TMR_Start_Timer(TELM_CRASH_TIMER, 70000, TelmProt_Send_GTimes);
+    650          }
+    651          
+    652          /*******************************************************************************
+    653          * Function:  prv3G_evt_emergency_call
+    654          *
+    655          * Parameters:  None
+    656          * Returns:  None
+    657          * Description:  
+    658          *******************************************************************************/
+    659          static void prv3G_evt_g_high(int16_t data)
+    660          {
+    661              if ((1 != v3G_Get_Telematics_Activation_State()) ||
+    662                  (1 != TelmProt_Get_G_LogEnb()))
+    663                  return;
+    664              harsh_data = 1;
+    665          }
+    666          /*******************************************************************************
+    667          *    Function:  prv3G_evt_server_command
+    668          *  Parameters:  None
+    669          *     Returns:  None
+    670          * Description:  
+    671          *******************************************************************************/
+    672          static void prv3G_evt_server_command(int16_t data)
+    673          {
+    674          /*	vCanApp_Initialize_CAN1();
+    675          	vCAN1_Set_NetWork_Request(true);*/
+    676          //	vTelmApp_uploadData(TELM_SEC_EVT_SERVER_CMD, NULL);
+    677          }
+    678          
+    679          /*******************************************************************************
+    680          * Function:  prv3G_evt_sys_power_lost
+    681          *
+    682          * Parameters:  None
+    683          * Returns:  None
+    684          * Description:  automotive battery power lost
+    685          *******************************************************************************/
+    686          static void prv3G_evt_sys_power_lost(int16_t data)
+    687          {
+    688              if (1 != v3G_Get_Telematics_Activation_State())
+    689                  return;
+    690              DEBUG_PRINT0(DEBUG_HIGH,"[2G] low battery voltage!\n\r");
+    691              /* Set car battery abnormal status */
+    692              set_battery_status(1);
+    693              if (NET_WAIT_DATA == vATProt_Get_TCP_State())
+    694          	vTelmApp_uploadData(TELM_SEC_EVT_EXCEPTION, NULL);
+    695              else
+    696              {
+    697                  vTelmApp_Backup_Msg(TELM_SEC_EVT_EXCEPTION);
+    698          //        save_current_except();
+    699              }
+    700          }
+    701          
+    702          /*******************************************************************************
+    703          * Function:  prv3G_evt_sys_data_abnormal
+    704          *
+    705          * Parameters:  None
+    706          * Returns:  None
+    707          * Description:  Abnormal data entry function
+    708          *******************************************************************************/
+    709          static void prv3G_evt_drive_fault(int16_t data)
+    710          {
+    711              if (1 != v3G_Get_Telematics_Activation_State())
+    712                  return;
+    713              DEBUG_PRINT0(DEBUG_MEDIUM,"[2G] Poor drive operation!\n\r");
+    714              if (NET_WAIT_DATA == vATProt_Get_TCP_State())
+    715              {
+    716          	vTelmApp_uploadData(TELM_SEC_EVT_EXCEPTION, NULL);
+    717          	vTelmApp_uploadData(TELM_SEC_EVT_GSENSOR, NULL);
+    718              }
+    719              else
+    720              {
+    721                  vTelmApp_Backup_Msg(TELM_SEC_EVT_EXCEPTION);
+    722                  vTelmApp_Backup_Msg(TELM_SEC_EVT_GSENSOR);
+    723              }
+    724          }
+    725          
+    726          static void prv3G_evt_car_theft(int16_t data)
+    727          {
+    728              if (1 != v3G_Get_Telematics_Activation_State())
+    729                  return;
+    730              DEBUG_PRINT0(DEBUG_MEDIUM,"[2G] abnormal movement!\n\r");
+    731              if (NET_WAIT_DATA == vATProt_Get_TCP_State())
+    732              {
+    733          	vTelmApp_uploadData(TELM_SEC_EVT_EXCEPTION, NULL);
+    734          	vTelmApp_uploadData(TELM_SEC_EVT_GSENSOR, NULL);
+    735              }
+    736              else
+    737              {
+    738                  vTelmApp_Backup_Msg(TELM_SEC_EVT_EXCEPTION);
+    739                  vTelmApp_Backup_Msg(TELM_SEC_EVT_GSENSOR);
+    740              }
+    741          }
+    742          
+    743          static void prv3G_evt_pid_data(int16_t data)
+    744          {
+    745              /* Collect data from CAN and upload */
+    746              if (1 != v3G_Get_Telematics_Activation_State())
+    747                  return;
+    748              if (NET_WAIT_DATA == vATProt_Get_TCP_State())
+    749              {
+    750                  vTelmApp_uploadData(TELM_SEC_EVT_PID, NULL);
+    751              }
+    752              else
+    753              {
+    754                  vTelmApp_Backup_Msg(TELM_SEC_EVT_PID);
+    755              }
+    756          }
+    757          
+    758          static void prv3G_evt_dtc_data(int16_t data)
+    759          {
+    760              /* Collect data from CAN and upload */
+    761              if (1 != v3G_Get_Telematics_Activation_State())
+    762                  return;
+    763              if (NET_WAIT_DATA == vATProt_Get_TCP_State())
+    764                  vTelmApp_uploadData(TELM_SEC_EVT_DTC, NULL);
+    765              else
+    766                  vTelmApp_Backup_Msg(TELM_SEC_EVT_DTC);
+    767          }
+    768          
+    769          static void prv3G_evt_freeze_data(int16_t data)
+    770          {
+    771              /* Collect data from CAN and upload */
+    772              if (1 != v3G_Get_Telematics_Activation_State())
+    773                  return;
+    774              if (NET_WAIT_DATA == vATProt_Get_TCP_State())
+    775                  vTelmApp_uploadData(TELM_SEC_EVT_FREEZE, NULL);
+    776              else
+    777                  vTelmApp_Backup_Msg(TELM_SEC_EVT_FREEZE);
+    778          }
+    779          
+    780          static void prv3G_evt_engine_jam(int16_t data)
+    781          {
+    782              if (1 != v3G_Get_Telematics_Activation_State())
+    783                  return;
+    784              /* Set engine jam status */
+    785              DEBUG_PRINT0(DEBUG_MEDIUM,"[2G] engine light on!\n\r");
+    786              set_check_engine_light(1);
+    787              if (NET_WAIT_DATA == vATProt_Get_TCP_State())
+    788              {
+    789          	vTelmApp_uploadData(TELM_SEC_EVT_EXCEPTION, NULL);
+    790              }
+    791              else
+    792              {
+    793                  vTelmApp_Backup_Msg(TELM_SEC_EVT_EXCEPTION);
+    794          //        save_current_except();
+    795              }
+    796          }
+    797          
+    798          /*******************************************************************************
+    799          *    Function:  vRead_OBD_TSP_Data_NV
+    800          *
+    801          *  Parameters:  
+    802          *     Returns:  None
+    803          * Description:  Read TSP data saved in dataflash.
+    804          *******************************************************************************/
+    805          void vRead_OBD_TSP_Data_NV(void)
+    806          {
+    807              if (check_init_flag() == 0)//uninit, try to use ROM default config(IP, strategy sets...) 
+    808              {
+    809                  load_from_rom();
+    810              }
+    811              else//inited, load config from nor flash
+    812              {
+    813          //        load_from_rom();
+    814          //        write_init_config();
+    815                  load_from_nv();
+    816                  if (get_activated() == 1)
+    817                  {
+    818                      tbox_activated_state = 1;
+    819                      DEBUG_PRINT0( DEBUG_MEDIUM, "[2G]:Device is activated!\r\n");
+    820                  }
+    821              }
+    822              batt_volt_nv_read_info();
+    823          }
+    824          
+    825          /*=======================================================================================*\
+    826           * File Revision History
+    827           *=======================================================================================
+    828           * ----------  ------   ---------------------------------------------
+    829           *
+    830          \*=======================================================================================*/
+
+   Maximum stack usage in bytes:
+
+   .cstack Function
+   ------- --------
+      16   IOT_Task
+        16   -- Indirect call
+        16   -> Build_Message
+        16   -> OS_Send_Message
+        16   -> OS_Sleep
+        16   -> OS_Wait_Message
+        16   -> PS_Running
+        16   -> Sys_Is_Gsensor_Wakeup
+        16   -> Sys_Is_Low_Batt_Wakeup
+        16   -> TMR_Start_Timer
+        16   -> printf
+        16   -> prv2G_main_loop
+        16   -> prv3G_Module_Init
+        16   -> v3G_Get_Telematics_Module_Pwr_State
+        16   -> vATApp_Loop_Check
+        16   -> vATProt_Check_Receive
+        16   -> vATProt_Check_Transmit
+        16   -> vTaskSuspend
+        16   -> vTelmApp_main_loop
+        16   -> xTaskGetTickCountFromISR
+       8   check_nv_backup_message
+         8   -> eng_on_off_nv_empty
+         8   -> eng_on_off_nv_get_status
+         8   -> eng_on_off_nv_set_status
+         8   -> gps_backup_empty
+         8   -> vTelmApp_uploadData
+       8   prv2G_main_loop
+         8   -> PS_Eng_On
+         8   -> PS_Full_System
+         8   -> TelmProt_Is_New_OTA
+         8   -> TelmProt_Set_New_OTA
+         8   -> TelmProt_Travel_Summary_Record
+         8   -> check_nv_backup_message
+         8   -> eng_on_off_nv_empty
+         8   -> eng_on_off_ram_empty
+         8   -> eng_on_off_ram_get_status
+         8   -> eng_on_off_ram_set_status
+         8   -> get_gps_upload_freq
+         8   -> gps_backup_empty
+         8   -> gps_buffer_empty
+         8   -> gps_upload_status
+         8   -> gps_write_nv
+         8   -> printf
+         8   -> save_gps_buffer
+         8   -> set_gps_upload_backup
+         8   -> speed_check_func
+         8   -> u3G_Get_FMUpgrade_state
+         8   -> v3G_Get_Telematics_Activation_State
+         8   -> vATProt_Get_TCP_State
+         8   -> vGps_Get_Gps_Status
+         8   -> vTelmApp_Backup_Msg
+         8   -> vTelmApp_Upload_Backup
+         8   -> vTelmApp_uploadData
+       8   prv3G_Module_Init
+         8   -> v3G_Set_Telematics_Module_Pwr_State
+         8   -> vATApp_Init
+         8   -> vATProt_Init
+       0   prv3G_UART_stop
+       8   prv3G_evt_car_crashed
+         8   -> PS_Eng_On
+         8   -> TMR_Start_Timer
+         8   -> set_car_crash
+         8   -> v3G_Get_Telematics_Activation_State
+         8   -> vATProt_Get_TCP_State
+         8   -> vTelmApp_Backup_Msg
+         8   -> vTelmApp_uploadData
+       8   prv3G_evt_car_theft
+         8   -> printf
+         8   -> v3G_Get_Telematics_Activation_State
+         8   -> vATProt_Get_TCP_State
+         8   -> vTelmApp_Backup_Msg
+         8   -> vTelmApp_uploadData
+       8   prv3G_evt_drive_fault
+         8   -> printf
+         8   -> v3G_Get_Telematics_Activation_State
+         8   -> vATProt_Get_TCP_State
+         8   -> vTelmApp_Backup_Msg
+         8   -> vTelmApp_uploadData
+       8   prv3G_evt_dtc_data
+         8   -> v3G_Get_Telematics_Activation_State
+         8   -> vATProt_Get_TCP_State
+         8   -> vTelmApp_Backup_Msg
+         8   -> vTelmApp_uploadData
+       8   prv3G_evt_eng_on_off
+         8   -> TMR_Stop_Timer
+         8   -> eng_on_off_ram_write
+         8   -> v3G_Get_Telematics_Activation_State
+       8   prv3G_evt_engine_jam
+         8   -> printf
+         8   -> set_check_engine_light
+         8   -> v3G_Get_Telematics_Activation_State
+         8   -> vATProt_Get_TCP_State
+         8   -> vTelmApp_Backup_Msg
+         8   -> vTelmApp_uploadData
+       8   prv3G_evt_freeze_data
+         8   -> v3G_Get_Telematics_Activation_State
+         8   -> vATProt_Get_TCP_State
+         8   -> vTelmApp_Backup_Msg
+         8   -> vTelmApp_uploadData
+       8   prv3G_evt_g_high
+         8   -> TelmProt_Get_G_LogEnb
+         8   -> v3G_Get_Telematics_Activation_State
+       0   prv3G_evt_nop
+       8   prv3G_evt_pid_data
+         8   -> v3G_Get_Telematics_Activation_State
+         8   -> vATProt_Get_TCP_State
+         8   -> vTelmApp_Backup_Msg
+         8   -> vTelmApp_uploadData
+       8   prv3G_evt_reset_module
+         8   -> vATApp_Init
+         8   -> vATProt_Com_Reset
+       0   prv3G_evt_server_command
+       8   prv3G_evt_sys_power_lost
+         8   -> printf
+         8   -> set_battery_status
+         8   -> v3G_Get_Telematics_Activation_State
+         8   -> vATProt_Get_TCP_State
+         8   -> vTelmApp_Backup_Msg
+         8   -> vTelmApp_uploadData
+       0   u3G_Get_FMUpgrade_state
+       0   u3G_Set_FMUpgrade_state
+       0   v3G_Get_Telematics_Activation_State
+       0   v3G_Get_Telematics_Module_Pwr_State
+       8   v3G_Module_GoSleep
+         8   -> prv3G_UART_stop
+         8   -> u3G_Get_FMUpgrade_state
+         8   -> u3G_Set_FMUpgrade_state
+         8   -> v3G_Get_Telematics_Activation_State
+         8   -> vATApp_GoSleep
+         8   -> vATProt_GoSleep
+       8   v3G_Set_Telematics_Activation_State
+         8   -> set_activated
+       0   v3G_Set_Telematics_Module_Pwr_State
+       8   vRead_OBD_TSP_Data_NV
+         8   -> batt_volt_nv_read_info
+         8   -> check_init_flag
+         8   -> get_activated
+         8   -> load_from_nv
+         8   -> load_from_rom
+         8   -> printf
+       0   vSystem_check3GAntenna
+
+
+   Section sizes:
+
+   Bytes  Function/Label
+   -----  --------------
+      32  ?<Constant "[2G] Poor drive opera...">
+      28  ?<Constant "[2G] abnormal movemen...">
+      24  ?<Constant "[2G] engine light on!\n\r">
+      28  ?<Constant "[2G] low battery volt...">
+      36  ?<Constant "[2G]:===Car Battery I...">
+      28  ?<Constant "[2G]:Device is activa...">
+      24  ?<Constant "[GPS]:GPS first-fixed\n\r">
+       4  ??DataTable15
+       4  ??DataTable15_1
+       4  ??DataTable15_10
+       4  ??DataTable15_11
+       4  ??DataTable15_12
+       4  ??DataTable15_13
+       4  ??DataTable15_14
+       4  ??DataTable15_15
+       4  ??DataTable15_16
+       4  ??DataTable15_17
+       4  ??DataTable15_18
+       4  ??DataTable15_19
+       4  ??DataTable15_2
+       4  ??DataTable15_20
+       4  ??DataTable15_3
+       4  ??DataTable15_4
+       4  ??DataTable15_5
+       4  ??DataTable15_6
+       4  ??DataTable15_7
+       4  ??DataTable15_8
+       4  ??DataTable15_9
+     220  IOT_Task
+     114  check_nv_backup_message
+       1  eng_on_off_wait
+       4  eng_send_wait
+       4  gps_first_fixed
+       1  gps_record_cnt
+       1  harsh_data
+       1  msg_send_cnt
+     628  prv2G_main_loop
+      24  prv3G_Module_Init
+       2  prv3G_UART_stop
+      74  prv3G_evt_car_crashed
+      56  prv3G_evt_car_theft
+      56  prv3G_evt_drive_fault
+      36  prv3G_evt_dtc_data
+      34  prv3G_evt_eng_on_off
+      48  prv3G_evt_engine_jam
+      36  prv3G_evt_freeze_data
+      28  prv3G_evt_g_high
+       2  prv3G_evt_nop
+      36  prv3G_evt_pid_data
+      12  prv3G_evt_reset_module
+       2  prv3G_evt_server_command
+      48  prv3G_evt_sys_power_lost
+       1  tbox_activated_state
+      52  tcom_event_handler
+       4  telematics_module_pwr_on
+       4  telematics_module_upgrade_state
+       8  u3G_Get_FMUpgrade_state
+      10  u3G_Set_FMUpgrade_state
+       8  v3G_Get_Telematics_Activation_State
+       8  v3G_Get_Telematics_Module_Pwr_State
+      38  v3G_Module_GoSleep
+      20  v3G_Set_Telematics_Activation_State
+       8  v3G_Set_Telematics_Module_Pwr_State
+      46  vRead_OBD_TSP_Data_NV
+       2  vSystem_check3GAntenna
+
+ 
+    21 bytes in section .bss
+    52 bytes in section .data
+   200 bytes in section .rodata
+ 1 688 bytes in section .text
+ 
+ 1 688 bytes of CODE  memory
+   200 bytes of CONST memory
+    73 bytes of DATA  memory
+
+Errors: none
+Warnings: none
