@@ -25,7 +25,7 @@ if not "%~1" == "" goto debugFile
 
 @echo on 
 
-"C:\Program Files (x86)\IAR Systems\Embedded Workbench 7.5\common\bin\cspybat" -f "D:\workspace\dr001\dr001_suming\CORTEX_STM32F103_IAR\settings\DR001_STM32_MB.Debug.general.xcl" --backend -f "D:\workspace\dr001\dr001_suming\CORTEX_STM32F103_IAR\settings\DR001_STM32_MB.Debug.driver.xcl" 
+"C:\Program Files (x86)\IAR Systems\Embedded Workbench 8.0\common\bin\cspybat" -f "C:\workspacePrivate\tracker\Tracker\CORTEX_STM32F103_IAR\settings\DR001_STM32_MB.Debug.general.xcl" --backend -f "C:\workspacePrivate\tracker\Tracker\CORTEX_STM32F103_IAR\settings\DR001_STM32_MB.Debug.driver.xcl" 
 
 @echo off 
 goto end 
@@ -34,7 +34,7 @@ goto end
 
 @echo on 
 
-"C:\Program Files (x86)\IAR Systems\Embedded Workbench 7.5\common\bin\cspybat" -f "D:\workspace\dr001\dr001_suming\CORTEX_STM32F103_IAR\settings\DR001_STM32_MB.Debug.general.xcl" "--debug_file=%~1" --backend -f "D:\workspace\dr001\dr001_suming\CORTEX_STM32F103_IAR\settings\DR001_STM32_MB.Debug.driver.xcl" 
+"C:\Program Files (x86)\IAR Systems\Embedded Workbench 8.0\common\bin\cspybat" -f "C:\workspacePrivate\tracker\Tracker\CORTEX_STM32F103_IAR\settings\DR001_STM32_MB.Debug.general.xcl" "--debug_file=%~1" --backend -f "C:\workspacePrivate\tracker\Tracker\CORTEX_STM32F103_IAR\settings\DR001_STM32_MB.Debug.driver.xcl" 
 
 @echo off 
 :end
